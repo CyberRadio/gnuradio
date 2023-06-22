@@ -14,7 +14,7 @@ BuildRequires:	libusbx-devel, alsa-lib-devel, SDL-devel, guile-devel
 BuildRequires:	portaudio-devel, libtool, gsm-devel
 BuildRequires:	gsl-devel, numpy, PyQt4-devel, python-cheetah
 BuildRequires:	xdg-utils, python-lxml, pygtk2-devel, orc-devel
-BuildRequires:	desktop-file-utils
+BuildRequires:	desktop-file-utils, make
 BuildRequires:  qwt-devel
 BuildRequires:  zeromq-devel
 BuildRequires:  uhd-devel

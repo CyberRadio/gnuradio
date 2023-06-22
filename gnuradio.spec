@@ -79,12 +79,15 @@ cmake -DCMAKE_C_FLAGS_RELEASE:STRING="-DNDEBUG" \
 ..
 make -j 4
 
+
 %install
 # remove atsc example (bytecompilation problem)
 # the examples shouldn't be probably bytecompiled,
 # but selective bytecompilation would take a lot of time,
 # thus letting it as is
+cd build
 make install DESTDIR=%{buildroot}
+
 rm -rf %{buildroot}%{_datadir}/%{name}/examples/atsc
 
 # install desktop file, icons, and MIME configuration to right locations
@@ -146,8 +149,8 @@ fi
 %{_libdir}/cmake/gnuradio
 
 %files doc
-%doc %{_docdir}/%{name}/html
-%doc %{_docdir}/%{name}/xml
+%doc %{_docdir}/%{name}-%{version}/html
+%doc %{_docdir}/%{name}-%{version}/xml
 
 %files examples
 %{_datadir}/gnuradio/examples

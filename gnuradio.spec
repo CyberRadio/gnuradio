@@ -84,6 +84,7 @@ make -j 4
 # the examples shouldn't be probably bytecompiled,
 # but selective bytecompilation would take a lot of time,
 # thus letting it as is
+make install DESTDIR=%{buildroot}
 rm -rf %{buildroot}%{_datadir}/%{name}/examples/atsc
 
 # install desktop file, icons, and MIME configuration to right locations
@@ -92,7 +93,7 @@ desktop-file-install --dir=%{buildroot}%{_datadir}/applications \
   %{buildroot}%{_datadir}/%{name}/grc/freedesktop/gnuradio-grc.desktop
 mkdir -p %{buildroot}%{_datadir}/mime/packages
 mv %{buildroot}%{_datadir}/%{name}/grc/freedesktop/gnuradio-grc.xml %{buildroot}%{_datadir}/mime/packages
-for x in 32 48 64 128 256
+for x in 16 24 32 48 64 128 256
 do
   mkdir -p %{buildroot}%{_datadir}/icons/hicolor/${x}x${x}/apps
   mv %{buildroot}%{_datadir}/%{name}/grc/freedesktop/grc-icon-${x}.png %{buildroot}%{_datadir}/icons/hicolor/${x}x${x}/apps/gnuradio-grc.png

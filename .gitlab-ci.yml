@@ -1,0 +1,9 @@
+stages:
+  - build
+
+build-centos7:
+  stage: build
+  image: ndr562-test-1002:5000/centos7-gnuradio37
+  script:
+    - if [ -d ../build ]; then rm -rf ../build; fi && mkdir ../build && cd ../build
+    - makerpm ../

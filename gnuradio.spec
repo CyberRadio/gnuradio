@@ -14,14 +14,14 @@ BuildRequires:	libusbx-devel, alsa-lib-devel, SDL-devel, guile-devel
 BuildRequires:	portaudio-devel, libtool, gsm-devel
 BuildRequires:	gsl-devel, numpy, PyQt4-devel, python-cheetah
 BuildRequires:	xdg-utils, python-lxml, pygtk2-devel, orc-devel
-BuildRequires:	desktop-file-utils, make
-BuildRequires:  qwt-devel
+BuildRequires:	desktop-file-utils, make, python-six
+BuildRequires:  qwt-devel, python-mako, gcc, gcc-c++
 BuildRequires:  zeromq-devel
 BuildRequires:  uhd-devel
 BuildRequires:  python2-sphinx
 Requires:	numpy, wxPython, scipy, portaudio, python-lxml
 Requires:	pygtk2, python-cheetah, PyQt4
-Requires:	PyQwt, PyOpenGL
+Requires:	PyQwt, PyOpenGL, uhd
 
 %description
 GNU Radio is a collection of software that when combined with minimal

@@ -21,7 +21,7 @@ BuildRequires:  uhd-devel
 BuildRequires:  python2-sphinx
 Requires:	numpy, wxPython, scipy, portaudio, python-lxml
 Requires:	pygtk2, python-cheetah, PyQt4
-Requires:	PyQwt, PyOpenGL, uhd
+Requires:	PyOpenGL, uhd
 
 %description
 GNU Radio is a collection of software that when combined with minimal

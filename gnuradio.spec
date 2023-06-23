@@ -34,7 +34,7 @@ performance wireless devices into software problems.
 Summary:	GNU Radio
 Group:		Applications/Engineering
 Requires:	%{name} = %{version}-%{release}
-Requires:	cmake, boost169-devel
+Requires:	cmake, boost-devel
 
 %description devel
 GNU Radio Headers

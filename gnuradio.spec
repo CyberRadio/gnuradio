@@ -76,8 +76,8 @@ cmake -DCMAKE_C_FLAGS_RELEASE:STRING="-DNDEBUG" \
       -DSYSCONF_INSTALL_DIR:PATH=/etc \
       -DSHARE_INSTALL_PREFIX:PATH=/usr/share \
       -DLIB_SUFFIX=64 \
-..
-make -j 4
+.. >> /tmp/%{name}_cmake.log
+make -j 4 2>&1 >> /tmp/%{name}_compile.log
 
 
 %install
@@ -86,7 +86,7 @@ make -j 4
 # but selective bytecompilation would take a lot of time,
 # thus letting it as is
 cd build
-make install DESTDIR=%{buildroot}
+make install DESTDIR=%{buildroot} >> /tmp/%{name}_install.log
 
 rm -rf %{buildroot}%{_datadir}/%{name}/examples/atsc
 
@@ -132,25 +132,26 @@ fi
 %{_bindir}/*
 %{_libdir}/lib*.so.*
 %{_libexecdir}/*
-%{_datadir}/gnuradio
+%{_datadir}/%{name}
 %{_datadir}/applications/gnuradio-grc.desktop
 %{_datadir}/mime/packages/gnuradio-grc.xml
 %{_datadir}/icons/hicolor/*/apps/gnuradio-grc.png
 %config(noreplace) %{_sysconfdir}/gnuradio
-%exclude %{_datadir}/gnuradio/examples
-%exclude %{_docdir}/%{name}/html
-%exclude %{_docdir}/%{name}/xml
-%doc %{_docdir}/%{name}
+%exclude %{_datadir}/%{name}/examples
+%exclude %{_docdir}/%{name}-%{version}/html
+%exclude %{_docdir}/%{name}-%{version}/xml
+%doc %{_docdir}/%{name}-%{version}
 
 %files devel
 %{_includedir}/*
 %{_libdir}/lib*.so
 %{_libdir}/pkgconfig/*.pc
-%{_libdir}/cmake/gnuradio
+%{_libdir}/cmake/%{name}
+%{_libdir}/cmake/volk
 
 %files doc
 %doc %{_docdir}/%{name}-%{version}/html
 %doc %{_docdir}/%{name}-%{version}/xml
 
 %files examples
-%{_datadir}/gnuradio/examples
+%{_datadir}/%{name}/examples

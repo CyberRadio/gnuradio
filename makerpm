@@ -1,0 +1,526 @@
+#!/bin/bash
+#################################################################
+# makerpm
+#
+# Make a RedHat-class installer package from source files
+#
+# Author: DA
+# Company: CyberRadio Solutions, Inc.
+# Copyright: Copyright (c) 2017-2023 CyberRadio Solutions, Inc.
+#     All rights reserved.
+#################################################################
+
+#################################################################
+# 
+# usage: makerpm {options} [Source folder name]
+#  
+# -v [TAG],--version=[TAG]             Use version tag [TAG] rather than 
+#                                      tagging with the default (either
+#                                      today's date or the version number
+#                                      from a setup.py/configure.ac file)
+# -p [PACKAGE],--package=[PACKAGE]     Use PACKAGE as the package name 
+#                                      instead of basing the package name 
+#                                      off of the source folder name
+# -n,--no-cleanup                      Do not clean up intermediate files
+#                                      after making the package
+# -2, --python2                        Force package to build under 
+#                                      Python 2
+# -3, --python3                        Force package to build under
+#                                      Python 3
+# -y, --no-python                      Do not prepend 'python[3]-' to
+#                                      the package name even if the build
+#                                      uses a setup.py file
+#  
+# Source folder MUST contain an RPM spec file with package building 
+# information.  It is assumed that each source file folder will contain its
+# own spec file.
+#
+# The makerpm script can automatically determine package name and version
+# number from a variety of sources.  Sources are checked in the following
+# order:
+# (1) Version information file (version.txt)
+# (2) Python distutils setup file (setup.py)
+# (3) GNU Autotools configuration file (configure.ac)
+# (4) CMake lists file (CMakeLists.txt)
+#
+# NOTE: Because of how Debian package building tools work, the source folder
+# must NOT refer to the current working directory.
+#
+#################################################################
+
+print_usage()
+{
+    echo "usage: $0 {options} [Source folder name]"
+    echo " "
+    echo "-v [TAG],--version=[TAG]             Use version tag [TAG] rather than "
+    echo "                                     tagging with the default (either "
+    echo "                                     today's date or the version number "
+    echo "                                     from a setup.py/configure.ac file)"
+    echo "-p [PACKAGE],--package=[PACKAGE]     Use PACKAGE as the package name "
+    echo "                                     instead of basing the package name "
+    echo "                                     off of the source folder name"
+    echo "-n,--no-cleanup                      Do not clean up intermediate files "
+    echo "                                     after making the package"
+    echo "-2, --python2                        Force package to build under"
+    echo "                                     Python 2"
+    echo "-3, --python3                        Force package to build under"
+    echo "                                     Python 3"
+    echo "-y, --no-python                      Do not prepend 'python[3]-' to"
+    echo "                                     the package name even if the build"
+    echo "                                     uses a setup.py file" 
+    echo " "
+    echo "Source folder MUST contain an RPM spec file with package building "
+    echo "information.  It is assumed that each source file folder will contain "
+    echo "its own spec file."
+    echo " "
+    echo "The makerpm script can automatically determine package name and version"
+    echo "number from a variety of sources.  Sources are checked in the following"
+    echo "order:"
+    echo "(1) Version information file (version.txt)"
+    echo "(2) Python distutils setup file (setup.py)"
+    echo "(3) GNU Autotools configuration file (configure.ac)"
+    echo "(4) CMake lists file (CMakeLists.txt)"
+    echo " "
+    echo "NOTE: Because of how Debian package building tools work, the source folder "
+    echo "must NOT refer to the current working directory."
+    echo " "
+}
+
+exit_with_usage()
+{
+    # $1: Exit code
+    # $2: Error message to display
+    echo "ERROR: $2"
+    echo " "
+    print_usage
+    exit $1
+}
+
+exit_if_error()
+{
+    # $1: Exit code from prior command
+    # $2: [Optional] Error message or informational message 
+    #     identifying the problem command
+    if [ $1 -ne 0 ]
+    then
+        echo "ERROR: Command returned error code: $1"
+        if [ ! -z "$2" ]
+        then
+            echo "ERROR: -- $2"
+        fi
+        echo "ERROR condition detected.  Exiting script."
+        exit $1
+    fi
+}
+
+is_package_version_ge()
+{
+    # $1: Version number being tested
+    # $2: Version number for the constraint
+    rpmdev-vercmp "$1" "$2" >/dev/null 2>&1
+    if [[ $? -eq 0 || $? -eq 11 ]]
+    then
+        echo "1"
+    else
+        echo "0"
+    fi
+}
+
+#########################################################
+# Set options and variables
+#########################################################
+# SRC_FOLDER_NAME: Source folder name
+# RPM_PKG_NAME: RPM package name
+# RPM_PKG_VERSION: RPM package version
+# RPM_PKG_ARCH: RPM package architecture
+# RPM_PKG_ARCH_GNU: RPM package GNU system type
+# RPM_PKG_OS: RPM package OS name
+# RPM_PKG_OS_VER: RPM package OS (major) version number
+# CLEANUP: Whether to do cleanup (1) or not (0)
+RPM_PKG_VERSION=
+RPM_PKG_ARCH=$(arch)
+RPM_PKG_ARCH_GNU=$(arch)
+# How we determine Package OS depends on the OS
+if [ -e /etc/centos-release ]
+then
+    RPM_PKG_TEMP=( $(cut /etc/centos-release -d' ' -f1-) )
+    RPM_PKG_OS=$(echo ${RPM_PKG_TEMP[0]} | tr '[:upper:]' '[:lower:]')
+    RPM_PKG_OS_VER=$(echo ${RPM_PKG_TEMP[3]} | cut -d'.' -f1)
+elif [ -e /etc/fedora-release ]
+then
+    RPM_PKG_TEMP=( $(cut /etc/fedora-release -d' ' -f1-) )
+    RPM_PKG_OS=$(echo ${RPM_PKG_TEMP[0]} | tr '[:upper:]' '[:lower:]')
+    RPM_PKG_OS_VER=$(echo ${RPM_PKG_TEMP[2]} | cut -d'.' -f1)
+elif [ -e /etc/redhat-release ]
+then
+    RPM_PKG_TEMP=( $(cut /etc/redhat-release -d' ' -f1-) )
+    RPM_PKG_OS=$(echo ${RPM_PKG_TEMP[0]}${RPM_PKG_TEMP[1]} | tr '[:upper:]' '[:lower:]')
+    RPM_PKG_OS_VER=$(echo ${RPM_PKG_TEMP[6]} | cut -d'.' -f1)
+else
+    RPM_PKG_OS=$(lsb_release -si | tr '[:upper:]' '[:lower:]')
+    RPM_PKG_OS_VER=$(lsb_release -sr | cut -d'.' -f1)
+fi
+CLEANUP=1
+PYTHON_PREPEND=1
+# Determine the default Python version (2 or 3) on the build machine.
+# -- NOTE that some OSes don't have /usr/bin/python at all.  In this
+#    case, fall back to /usr/bin/python3. -- DA
+for PY_EXEC in /usr/bin/python /usr/bin/python3
+do
+    if [ -e ${PY_EXEC} ]
+    then
+        PYTHON_EXECUTABLE=${PY_EXEC}
+        PYTHON_VERSION=$(${PY_EXEC} -V 2>&1 | cut -d. -f1)
+        break
+    fi
+done
+# Parse command-line options
+set -- `getopt -n $0 -o hv:x:p:n23y -l "help version: extra: package: no-cleanup python2 python3 no-python" -- "$@"`
+while [ $# -gt 0 ]
+do
+    case "$1" in
+       -v|--version)
+        RPM_PKG_VERSION=$(eval echo $2)
+        shift
+        ;;
+       -p|--package)
+        RPM_PKG_NAME=$(eval echo $2)
+        shift
+        ;;
+       -n|--no-cleanup)
+        CLEANUP=0
+        ;;
+       -2|--python2)
+        PYTHON_VERSION="Python 2"
+        PYTHON_EXECUTABLE=/usr/bin/python2
+        ;;
+       -3|--python3)
+        PYTHON_VERSION="Python 3"
+        PYTHON_EXECUTABLE=/usr/bin/python3
+        ;;
+       -y|--no-python)
+        PYTHON_PREPEND=0
+        ;;
+       -h|--help)
+        print_usage
+        exit 2
+        ;;
+       -*)
+        break
+        ;;
+       *)
+        SRC_FOLDER_NAME=$1
+        break
+        ;;
+    esac
+    shift
+done
+# Parse the source folder name from the command line
+if [ $# -gt 1 ]
+then
+    SRC_FOLDER_NAME=$(eval echo $2)
+    exit_if_error $? "Source folder name is not a directory or does not exist."
+    # Remove any trailing slash from the source folder name
+    SRC_FOLDER_NAME=${SRC_FOLDER_NAME%/}
+    # Sanity check: Make sure source folder provided is actually a folder
+    if [ ! -d "${SRC_FOLDER_NAME}" ]
+    then
+        exit_if_error $? "Source folder name is not a directory or does not exist."
+    fi
+    # Also check: Make sure source folder does not refer to the current working
+    # directory.
+    SRC_FOLDER_ABSPATH=$(readlink -f "${SRC_FOLDER_NAME}")
+    WORKING_DIR=$(pwd)
+    if [ "${SRC_FOLDER_ABSPATH}" == "${WORKING_DIR}" ]
+    then
+        exit_if_error 1 "Source folder must not refer to the current working directory."
+    fi
+else
+    exit_with_usage 2 "Source folder was not provided"
+fi
+# Use the installed version of gnuradio-devel to determine build/runtime 
+# dependencies for packages involving GNU Radio
+GNURADIO_DEV_VERSION=$(rpm -q --qf "%{VERSION}" gnuradio-devel)
+ISGE=$(is_package_version_ge "${GNURADIO_DEV_VERSION}" "3.8")
+if [[ $ISGE -eq 1 ]]
+then
+    RPM_GNURADIO_PKG_DEP="gnuradio >= 3.8"
+    RPM_GNURADIO_DEV_PKG_DEP="gnuradio-devel >= 3.8"
+else
+    RPM_GNURADIO_PKG_DEP="gnuradio < 3.8"
+    RPM_GNURADIO_DEV_PKG_DEP="gnuradio-devel < 3.8"
+fi
+# For GNU Radio out-of-tree module packages (that is, the source folder 
+# name starts with "gr-"), automatically target the Python version used by
+# whatever version of GNU Radio we are using
+if [[ $(basename ${SRC_FOLDER_NAME}) == gr-* ]]
+then
+    ISGE=$(is_package_version_ge "${GNURADIO_DEV_VERSION}" "3.8")
+    if [[ $ISGE -eq 1 ]]
+    then
+        PYTHON_VERSION="Python 3"
+    else
+        PYTHON_VERSION="Python 2"
+    fi
+fi
+# Set some configuration variables based on which Python version we are
+# using.
+if [ "${PYTHON_VERSION}" == "Python 3" ]
+then
+    RPM_PYTHON_EXECUTABLE=/usr/bin/python3
+    RPM_PYTHON_PKG_PREFIX=python3
+    RPM_PYTHON_MACRO_DEF='%__python %{__python3}'
+    RPM_TWISTD_EXECUTABLE=/usr/bin/twistd3
+else
+    RPM_PYTHON_EXECUTABLE=/usr/bin/python2
+    RPM_PYTHON_PKG_PREFIX=python
+    RPM_PYTHON_MACRO_DEF='%__python %{__python2}'
+    RPM_TWISTD_EXECUTABLE=/usr/bin/twistd
+fi
+# If the source folder contains a version.txt file, extract the package
+# name and package version number from the file, if the user didn't 
+# override them on the command line
+if [ -e ${SRC_FOLDER_NAME}/version.txt ]
+then
+    QQQ=$(< ${SRC_FOLDER_NAME}/version.txt )
+    exit_if_error $? "Failed to obtain version info from version.txt."
+    eval ZZZ=(${QQQ})
+    exit_if_error $? "Failed to obtain version info from version.txt."
+    if [ -z ${RPM_PKG_NAME} ]
+    then
+        RPM_PKG_NAME=$(echo ${ZZZ[0]} | tr -d '\r')
+    fi
+    if [ -z ${RPM_PKG_VERSION} ]
+    then
+        RPM_PKG_VERSION=$(echo ${ZZZ[1]} | tr -d '\r')
+    fi
+# Or, if the source folder contains a setup.py file, use the
+# package name (prepending "python-" or "python3-", depending on Python
+# version) and package version number provided by the setup.py file, if 
+# the user didn't override them on the command line
+elif [ -e ${SRC_FOLDER_NAME}/setup.py ]
+then
+    #QQQ=$(${PYTHON_EXECUTABLE} ${SRC_FOLDER_NAME}/setup.py --name --version)
+    CURDIR=$(pwd)
+    cd ${SRC_FOLDER_NAME}
+    QQQ=$(${PYTHON_EXECUTABLE} setup.py --name --version)
+    exit_if_error $? "Failed to obtain version info from setup.py."
+    cd ${CURDIR}
+    eval ZZZ=(${QQQ})
+    exit_if_error $? "Failed to obtain version info from setup.py."
+    if [ -z ${RPM_PKG_NAME} ]
+    then
+        if [[ ${PYTHON_PREPEND} -eq 1 ]]
+        then
+            RPM_PKG_NAME="${RPM_PYTHON_PKG_PREFIX}-"
+        else
+            RPM_PKG_NAME=""
+        fi
+        RPM_PKG_NAME="${RPM_PKG_NAME}${ZZZ[0]}"
+    fi
+    if [ -z ${RPM_PKG_VERSION} ]
+    then
+        RPM_PKG_VERSION=${ZZZ[1]}
+    fi
+# Or, if the source folder contains a configure.ac file, use the
+# package name and package version number provided by the AC_INIT line
+# in the setup.py file, if the user didn't override them on the command 
+# line
+elif [ -e ${SRC_FOLDER_NAME}/configure.ac ]
+then
+    QQQ=$($(grep '^AC_INIT' ${SRC_FOLDER_NAME}/configure.ac | sed -e 's/AC_INIT(//g' -e 's/)//g' -e 's/,//g'))
+    exit_if_error $? "Failed to obtain version info from configure.ac."
+    eval ZZZ=(${QQQ})
+    exit_if_error $? "Failed to obtain version info from configure.ac."
+    if [ -z ${RPM_PKG_NAME} ]
+    then
+        RPM_PKG_NAME=${ZZZ[0]}
+    fi
+    if [ -z ${RPM_PKG_VERSION} ]
+    then
+        RPM_PKG_VERSION=${ZZZ[1]}
+    fi
+# Or, if the source folder contains a CMakeLists.txt file, determine
+# the project name and project version from CMake cache variables, if 
+# the user didn't override them on the command line.
+# NOTE: The CMakeLists.txt file needs to be set up so that PROJECT_NAME
+# and PROJECT_VERSION are defined as cache variables.
+elif [ -e ${SRC_FOLDER_NAME}/CMakeLists.txt ]
+then
+    CMAKE_SRC=$(readlink -f ${SRC_FOLDER_NAME})
+    exit_if_error $? "Failed to obtain version info from CMakeLists.txt."
+    rm -rf /tmp/makerpm
+    mkdir -p /tmp/makerpm
+    pushd /tmp/makerpm >/dev/null 2>&1
+    cmake ${CMAKE_SRC} -L >cmake_results.txt
+    exit_if_error $? "Failed to obtain version info from CMakeLists.txt."
+    if [ -z ${RPM_PKG_NAME} ]
+    then
+        ZZZ=$(grep 'PROJECT_NAME' cmake_results.txt)
+        #exit_if_error $?
+        RPM_PKG_NAME=${ZZZ##PROJECT_NAME:STRING=}
+    fi
+    if [ -z ${RPM_PKG_VERSION} ]
+    then
+        ZZZ=$(grep 'PROJECT_VERSION' cmake_results.txt)
+        #exit_if_error $?
+        RPM_PKG_VERSION=${ZZZ##PROJECT_VERSION:STRING=}
+    fi
+    popd >/dev/null 2>&1
+    rm -rf /tmp/makerpm
+fi
+# If the user did not specify a package name on the command line, 
+# and if the package name cannot be obtained from some other source, 
+# form the package name from the source folder name.
+if [ -z ${RPM_PKG_NAME} ]
+then
+    RPM_PKG_NAME=$(basename "${SRC_FOLDER_NAME}")
+fi
+# If the user did not specify a version number, and if
+# the version number cannot be obtained by some other
+# source, then use today's date for the version number
+if [ -z ${RPM_PKG_VERSION} ]
+then
+    RPM_PKG_VERSION=$(eval date +%y.%m.%d)
+fi
+# Try to make the provided package name and version conform to RPM 
+# naming conventions.
+# NOTE -- doing this may still result in a failure if the package
+# name cannot be made compliant!
+RPM_PKG_NAME=$(echo "${RPM_PKG_NAME}" | tr "[:upper:]" "[:lower:]" | tr "_" "-")
+RPM_PKG_VERSION=$(echo "${RPM_PKG_VERSION}" | tr "[:upper:]" "[:lower:]" | tr -d "_-")
+
+#########################################################
+# Build the RPM package
+#########################################################
+echo "RPM package parameters:"
+echo "* Source folder name: ${SRC_FOLDER_NAME}"
+echo "* RPM package name: ${RPM_PKG_NAME}"
+echo "* RPM package version: ${RPM_PKG_VERSION}"
+echo "* RPM package architecture: ${RPM_PKG_ARCH}"
+echo "* RPM package GNU system type: ${RPM_PKG_ARCH_GNU}"
+echo "* RPM package OS: ${RPM_PKG_OS}"
+echo "* RPM package OS version: ${RPM_PKG_OS_VER}"
+echo "* Python version: ${PYTHON_VERSION}"
+echo "* Python executable: ${RPM_PYTHON_EXECUTABLE}"
+echo "* RPM package Python prefix: ${RPM_PYTHON_PKG_PREFIX}"
+echo "* RPM package Python macro def: ${RPM_PYTHON_MACRO_DEF}"
+echo "* RPM twistd executable: ${RPM_TWISTD_EXECUTABLE}"
+echo "* RPM GNU Radio package dependency: ${RPM_GNURADIO_PKG_DEP}"
+echo "* RPM GNU Radio development package dependency: ${RPM_GNURADIO_DEV_PKG_DEP}"
+echo " "
+# Create/overwrite the macro file in the user's home directory
+# to set which Python version we build against
+echo "${RPM_PYTHON_MACRO_DEF}" > ${HOME}/.rpmmacros
+# Create temporary build folder
+RPM_BUILD_FOLDER_NAME=${RPM_PKG_NAME}-${RPM_PKG_VERSION}
+echo "Creating temporary build folder: ${RPM_BUILD_FOLDER_NAME}"
+if [ -e ${RPM_BUILD_FOLDER_NAME} ]
+then
+    rm -rf ${RPM_BUILD_FOLDER_NAME}
+    exit_if_error $?
+fi
+mkdir -p ${RPM_BUILD_FOLDER_NAME}
+exit_if_error $?
+# Copy files from source folder into build folder
+echo "Copying files: ${SRC_FOLDER_NAME} ==> ${RPM_BUILD_FOLDER_NAME}"
+cp -rf ${SRC_FOLDER_NAME}/* ${RPM_BUILD_FOLDER_NAME}
+exit_if_error $? "In copying files"
+cp -rf ${SRC_FOLDER_NAME}/.[1-9a-zA-Z]* ${RPM_BUILD_FOLDER_NAME} || true
+# Identify the spec file
+RPM_SPEC_FILE_LIST=( $(find ${RPM_BUILD_FOLDER_NAME} -name "*.spec") )
+if [ ${#RPM_SPEC_FILE_LIST} -eq 0 ]
+then
+    echo "ERROR: No spec file found!"
+    exit_if_error 1
+fi
+RPM_SPEC_FILE=${RPM_SPEC_FILE_LIST[0]}
+# Python shebanging fixes for Python (since "/usr/bin/env python[3]" syntax is 
+# deprecated)
+# -- Replace "#!/usr/bin/env python3" with the Python 3 executable
+grep -rlZ "#!/usr/bin/env python3" ${RPM_BUILD_FOLDER_NAME} | \
+        xargs -0 -r sed -i -e "1 s|#!/usr/bin/env python3|#!${RPM_PYTHON3_EXECUTABLE}|"
+# -- Replace "#!/usr/bin/env python2" with the Python 2 executable
+grep -rlZ "#!/usr/bin/env python2" ${RPM_BUILD_FOLDER_NAME} | \
+        xargs -0 -r sed -i -e "1 s|#!/usr/bin/env python2|#!${RPM_PYTHON2_EXECUTABLE}|"
+# -- Replace "#!/usr/bin/env python" with the Python executable for the
+#    Python version we are building for
+grep -rlZ "#!/usr/bin/env python" ${RPM_BUILD_FOLDER_NAME} | \
+        xargs -0 -r sed -i -e "1 s|#!/usr/bin/env python|#!${RPM_PYTHON_EXECUTABLE}|"
+# Twisted daemon executable fixes
+# -- NOTE: Make sure that we ignore *this* script in all cases -- DA
+# -- Replace /usr/bin/twistd with /usr/bin/twistd3 if this is a Python 3
+#    package
+grep -rlZ --exclude=makedeb "/usr/bin/twistd" ${RPM_BUILD_FOLDER_NAME} | \
+        xargs -0 -r sed -i -e "s|/usr/bin/twistd|${RPM_TWISTD_EXECUTABLE}|g"
+# Replace RPM_PKG_* placeholders in the spec file with our parameters,
+# and store the result in a new spec file in the current directory
+RPM_TARGET_SPEC_FILE=$(basename ${RPM_SPEC_FILE})
+echo "Versioning RPM package: ${RPM_PKG_NAME}"
+sed -e '/^\s*#\([^!]\|$\)/ d' \
+    -e "s|RPM_PKG_NAME|${RPM_PKG_NAME}|g" \
+    -e "s|RPM_PKG_VERSION|${RPM_PKG_VERSION}|g" \
+    -e "s|RPM_PKG_ARCH_GNU|${RPM_PKG_ARCH_GNU}|g" \
+    -e "s|RPM_PKG_ARCH|${RPM_PKG_ARCH}|g" \
+    -e "s|RPM_PKG_OS_VER|${RPM_PKG_OS_VER}|g" \
+    -e "s|RPM_PKG_OS|${RPM_PKG_OS}|g" \
+    -e "s|RPM_TWISTD_EXECUTABLE|${RPM_TWISTD_EXECUTABLE}|g" \
+    -e "s|RPM_PYTHON_EXECUTABLE|${RPM_PYTHON_EXECUTABLE}|g" \
+    -e "s|RPM_PYTHON_PKG_PREFIX|${RPM_PYTHON_PKG_PREFIX}|g" \
+    -e "s|RPM_GNURADIO_PKG_DEP|${RPM_GNURADIO_PKG_DEP}|g" \
+    -e "s|RPM_GNURADIO_DEV_PKG_DEP|${RPM_GNURADIO_DEV_PKG_DEP}|g" \
+    ${RPM_SPEC_FILE} > ${RPM_TARGET_SPEC_FILE}
+exit_if_error $? "In versioning file ${RPM_SPEC_FILE}"
+# Read the spec file to get the source code archive name
+RPM_SOURCE_ARCHIVE=$(grep 'Source: ' ${RPM_TARGET_SPEC_FILE})
+exit_if_error $? "In getting source code archive name"
+RPM_SOURCE_ARCHIVE=${RPM_SOURCE_ARCHIVE/Source: /}
+# Build the source code archive
+echo "Building source code archive: ${RPM_SOURCE_ARCHIVE}"
+tar zcf ${RPM_SOURCE_ARCHIVE} ${RPM_BUILD_FOLDER_NAME}
+exit_if_error $? "In building source code archive ${RPM_SOURCE_ARCHIVE}"
+echo "Removing build folder: ${RPM_BUILD_FOLDER_NAME}"
+rm -rf ${RPM_BUILD_FOLDER_NAME}
+exit_if_error $?
+# Execute rpmbuild in the current folder, using the target spec file
+# and the source code archive
+echo "Building RPM package"
+set +e
+rpmbuild --define "_topdir $(pwd)" \
+                --define "_builddir $(pwd)" \
+                --define "_rpmdir $(pwd)" \
+                --define "_sourcedir $(pwd)" \
+                --define "_specdir $(pwd)" \
+                --define "_srcrpmdir $(pwd)" \
+                --define "_buildrootdir $(pwd)" \
+                -bb ${RPM_TARGET_SPEC_FILE}
+exit_if_error $?
+# If rpmbuild succeeds, then it generates the RPM files in one of
+# two folders:
+# * <architecture> for architecture-dependent RPMs
+# * "noarch" for architecture-independent RPMs
+# Move the generated RPM files from these folders, and then
+# delete the folders.
+for FOLDER in ${RPM_PKG_ARCH} noarch
+do
+    if [ -e ${FOLDER} ]
+    then
+        mv ${FOLDER}/*.rpm .
+        rm -rf ${FOLDER}
+    fi
+done
+# Clean up
+if [ ${CLEANUP} -eq 1 ]
+then
+    echo "Cleaning up: ${RPM_PKG_NAME}"
+    # Source code archive
+    rm -rf ${RPM_SOURCE_ARCHIVE}
+    # Target spec file
+    rm -rf ${RPM_TARGET_SPEC_FILE}
+    # Build folder
+    rm -rf ${RPM_BUILD_FOLDER_NAME}
+else
+    echo "Not cleaning up at user request"
+fi
+echo "PACKAGE BUILD COMPLETE"
+exit 0
